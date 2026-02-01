@@ -4,7 +4,7 @@ bl_info = {
     "version": (1, 4),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > Spritesheet",
-    "description": "Render a spritesheet from a model and camera",
+    "description": "Render a spritesheet from camera",
     "category": "Render",
 }
 
@@ -21,56 +21,14 @@ from bpy.props import (
     BoolProperty,
 )
 from bpy.types import Panel, Operator, PropertyGroup
+import numpy as np
 
 class SpritesheetProperties(PropertyGroup):
-    model: PointerProperty(
-        name="Model",
-        type=bpy.types.Object,
-        description="Select the model to render",
-    )
-    camera: PointerProperty(
-        name="Camera",
-        type=bpy.types.Object,
-        description="Select the camera to render from",
-    )
     output_path: StringProperty(
         name="Output Path",
         description="Directory to save the spritesheet",
         default="//",
         subtype='DIR_PATH',
-    )
-    image_width: IntProperty(
-        name="Image Width",
-        description="Width of the spritesheet (pixels)",
-        default=1024,
-        min=1,
-    )
-    image_height: IntProperty(
-        name="Image Height",
-        description="Height of the spritesheet (pixels)",
-        default=1024,
-        min=1,
-    )
-    frames_per_second: IntProperty(
-        name="Frames Per Second",
-        description="Number of frames rendered per second",
-        default=24,
-        min=1,
-    )
-    rotation_axis: EnumProperty(
-        name="Rotation Axis",
-        description="Axis to rotate the model around",
-        items=[
-            ('X', "X", ""),
-            ('Y', "Y", ""),
-            ('Z', "Z", ""),
-        ],
-        default='Z',
-    )
-    use_animation: BoolProperty(
-        name="Use Animation",
-        description="Render frames from the timeline animation instead of rotating the model",
-        default=False,
     )
     start_frame: IntProperty(
         name="Start Frame",
@@ -81,51 +39,44 @@ class SpritesheetProperties(PropertyGroup):
     end_frame: IntProperty(
         name="End Frame",
         description="End frame of the animation",
-        default=250,
+        default=64,
         min=1,
     )
-    render_360_animation: BoolProperty(
-        name="Render 360 Animation",
-        description="Render 360-degree animation with fixed settings",
-        default=False,
+    sprites_per_row: IntProperty(
+        name="Sprites Per Row",
+        description="Number of sprites per row",
+        default=8,
+        min=1,
+    )
+    sprites_per_column: IntProperty(
+        name="Sprites Per Column",
+        description="Number of sprites per column",
+        default=8,
+        min=1,
     )
 
 class RENDER_OT_spritesheet(Operator):
     bl_idname = "render.spritesheet"
     bl_label = "Render Spritesheet"
-    bl_description = "Render the spritesheet based on settings"
+    bl_description = "Render the spritesheet, using current render resolution as sprite size"
 
     def execute(self, context):
         props = context.scene.spritesheet_props
-        model = props.model
-        camera = props.camera
-
-        if not model or not camera:
-            self.report({'ERROR'}, "Please select both a model and a camera.")
-            return {'CANCELLED'}
 
         scene = context.scene
-        scene.camera = camera
-
-        image_width = props.image_width
-        image_height = props.image_height
-        frames_per_second = props.frames_per_second
         output_path = bpy.path.abspath(props.output_path)
 
         # Set render settings
-        scene.render.resolution_x = image_width
-        scene.render.resolution_y = image_height
-        scene.render.fps = frames_per_second
+        sprite_width = scene.render.resolution_x
+        sprite_height = scene.render.resolution_y
         scene.render.image_settings.file_format = 'PNG'
         scene.render.film_transparent = True
 
         # Spritesheet dimensions
-        sprites_per_row = 8
-        sprites_per_column = 8
-        sprite_width = image_width // sprites_per_row
-        sprite_height = image_height // sprites_per_column
-        sheet_width = sprite_width * sprites_per_row
-        sheet_height = sprite_height * sprites_per_column
+        sprites_per_row = props.sprites_per_row
+        sprites_per_column = props.sprites_per_column
+        image_width = sprites_per_row * sprite_width
+        image_height = sprites_per_column * sprite_height
 
         # Ensure output directory exists
         if not os.path.exists(output_path):
@@ -135,102 +86,88 @@ class RENDER_OT_spritesheet(Operator):
         spritesheet_name = "spritesheet_image"
         spritesheet = bpy.data.images.new(
             spritesheet_name,
-            width=sheet_width,
-            height=sheet_height,
+            width=image_width,
+            height=image_height,
             alpha=True,
             float_buffer=False
         )
-
-        # Initialize the spritesheet pixels to transparent
-        blank_pixels = [0.0, 0.0, 0.0, 0.0] * (sheet_width * sheet_height)
-        spritesheet.pixels = blank_pixels
+        
+        print(f"Spritesheet dimensions: {image_width}, {image_height}")
 
         # Store original frame and rotation
         original_frame = scene.frame_current
-        original_rotation = model.rotation_euler.copy()
+        
+        # Calculate frames to render for animation
+        start_frame = props.start_frame
+        end_frame = props.end_frame
+        total_frames = end_frame - start_frame + 1
 
-        if props.render_360_animation:
-            total_rotations = 8
-            rotation_angle = 360 / total_rotations
-
-            # Calculate frames to render for animation
-            start_frame = props.start_frame
-            end_frame = props.end_frame
-            total_frames = end_frame - start_frame + 1
-
-            if total_frames < sprites_per_row:
-                self.report({'ERROR'}, "Animation frame range is smaller than the number of sprites per row.")
-                return {'CANCELLED'}
-
-            frame_numbers = [
-                int(round(start_frame + i * (total_frames - 1) / (sprites_per_row - 1)))
-                for i in range(sprites_per_row)
-            ]
-
-            sprite_index = 0
-            for rotation_index in range(total_rotations):
-                # Calculate the rotation angle for the current rotation
-                rotation_angle_rad = math.radians(rotation_angle * rotation_index)
-
-                # Apply rotation to the model
-                model.rotation_euler = original_rotation.copy()
-                axis_index = 'XYZ'.index(props.rotation_axis)
-                model.rotation_euler[axis_index] += rotation_angle_rad
-
-                # Update the scene
-                context.view_layer.update()
-
-                # Render each frame in the animation
-                for i, frame_number in enumerate(frame_numbers):
-                    scene.frame_set(frame_number)
-
-                    # Update the scene
-                    context.view_layer.update()
-
-                    # Render to a temporary image
-                    temp_image_name = f"sprite_{sprite_index:03d}"
-                    scene.render.image_settings.file_format = 'OPEN_EXR'
-                    scene.render.image_settings.color_mode = 'RGBA'
-                    scene.render.image_settings.color_depth = '16'
-                    scene.render.filepath = os.path.join(output_path, temp_image_name)
-                    bpy.ops.render.render(write_still=True)
-
-                    # Load the rendered image
-                    temp_image_path = scene.render.filepath + ".exr"
-                    temp_image = bpy.data.images.load(temp_image_path)
-
-                    # Calculate position in the spritesheet
-                    row = rotation_index  # Rows correspond to rotations
-                    column = i  # Columns correspond to frames in animation
-                    x = column * sprite_width
-                    y = (sprites_per_column - 1 - row) * sprite_height  # Flip y-axis
-
-                    # Copy pixels from temp image to spritesheet
-                    temp_image.scale(sprite_width, sprite_height)
-                    temp_pixels = list(temp_image.pixels)
-
-                    for pixel_y in range(sprite_height):
-                        for pixel_x in range(sprite_width):
-                            src_index = ((pixel_y * sprite_width) + pixel_x) * 4
-                            dest_x = x + pixel_x
-                            dest_y = y + pixel_y
-                            dest_index = ((dest_y * sheet_width) + dest_x) * 4
-                            spritesheet.pixels[dest_index:dest_index+4] = temp_pixels[src_index:src_index+4]
-
-                    # Remove temp image and file
-                    bpy.data.images.remove(temp_image)
-                    os.remove(temp_image_path)
-
-                    sprite_index += 1
-
-            # Restore original frame and rotation
-            scene.frame_set(original_frame)
-            model.rotation_euler = original_rotation
-
-        else:
-            # Existing logic for other modes can be placed here
-            self.report({'ERROR'}, "Please enable 'Render 360 Animation' to use this feature.")
+        if total_frames > sprites_per_row * sprites_per_column:
+            self.report({'ERROR'}, "Animation frame range is smaller than the number of sprites per row * column.")
             return {'CANCELLED'}
+
+        block_array = []
+        for i in range(total_frames):
+            print(f"Frame {i}\n")
+            row = math.floor(i / sprites_per_row)
+            column = i % sprites_per_column
+            
+            if len(block_array) <= row:
+                block_array.append([])
+            block_row = block_array[row]
+            
+            scene.frame_set(i)
+
+            # Update the scene
+            context.view_layer.update()
+
+            # Render to a temporary image
+            temp_image_name = f"sprite_{i:03d}"
+            scene.render.image_settings.file_format = 'OPEN_EXR'
+            scene.render.image_settings.color_mode = 'RGBA'
+            scene.render.image_settings.color_depth = '16'
+            scene.render.filepath = os.path.join(output_path, temp_image_name)
+            bpy.ops.render.render(write_still=True)
+
+            # Load the rendered image
+            temp_image_path = scene.render.filepath + ".exr"
+            temp_image = bpy.data.images.load(temp_image_path)
+            
+            img = np.array(temp_image.pixels[:])
+            img = np.reshape(img, (sprite_height, sprite_width, 4))
+            
+            # block concatenates from last dimension backwards, so we need to put rgb array in first dimension
+            #img = img.transpose(2, 0, 1)
+            block_row.append(img)
+            print(f"Temp image dimensions: {img.shape}")
+
+            # Remove temp image and file
+            bpy.data.images.remove(temp_image)
+            os.remove(temp_image_path)
+            
+        while len(block_array[-1]) < sprites_per_row:
+            block_array[-1].append(np.zeros((sprite_height, sprite_width, 4)))
+            
+        print(f"First: {len(block_array[0])} - Last: {len(block_array[-1])}")
+            
+        # Restore original frame and rotation
+        scene.frame_set(original_frame)
+        
+        print(f"Block array: {block_array}")
+        
+        images_2d = [[np.asarray(img) for img in row] for row in block_array]
+        
+        # Stack images horizontally per row
+        rows = [np.concatenate(row, axis=1) for row in images_2d]
+
+        # Stack rows vertically
+        grid = np.concatenate(rows, axis=0)
+        
+        # blender coords is upside down relative to numpy
+        grid = np.flipud(grid)
+        
+        print(f"Block dimensions: {grid.shape}")
+        spritesheet.pixels = grid.reshape(-1).tolist()  # flatten in 1 dimension, whatever size necessary
 
         # Save the spritesheet
         spritesheet.filepath_raw = os.path.join(output_path, "spritesheet.png")
@@ -256,22 +193,12 @@ class VIEW3D_PT_spritesheet_renderer(Panel):
         layout = self.layout
         props = context.scene.spritesheet_props
 
-        layout.prop(props, "model")
-        layout.prop(props, "camera")
         layout.prop(props, "output_path")
-        layout.prop(props, "image_width")
-        layout.prop(props, "image_height")
-        layout.prop(props, "frames_per_second")
+        layout.prop(props, "sprites_per_row")
+        layout.prop(props, "sprites_per_column")
 
-        layout.prop(props, "render_360_animation")
-
-        if props.render_360_animation:
-            layout.prop(props, "rotation_axis")
-            layout.prop(props, "start_frame")
-            layout.prop(props, "end_frame")
-        else:
-            layout.label(text="Enable 'Render 360 Animation' to use this feature.")
-
+        layout.prop(props, "start_frame")
+        layout.prop(props, "end_frame")
         layout.operator("render.spritesheet", text="Render Spritesheet", icon='RENDER_STILL')
 
 classes = (
