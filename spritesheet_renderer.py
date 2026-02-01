@@ -26,9 +26,9 @@ import numpy as np
 class SpritesheetProperties(PropertyGroup):
     output_path: StringProperty(
         name="Output Path",
-        description="Directory to save the spritesheet",
-        default="//",
-        subtype='DIR_PATH',
+        description="Filepath to save the spritesheet",
+        default="//spritesheet.png",
+        subtype='FILE_PATH',
     )
     start_frame: IntProperty(
         name="Start Frame",
@@ -65,6 +65,11 @@ class RENDER_OT_spritesheet(Operator):
 
         scene = context.scene
         output_path = bpy.path.abspath(props.output_path)
+        dir_path = os.path.dirname(output_path)
+        
+        if os.path.isdir(output_path):
+            self.report({'ERROR'}, "Output path refers to a directory, must be a file path.")
+            return {'CANCELLED'}
 
         # Set render settings
         sprite_width = scene.render.resolution_x
@@ -79,8 +84,8 @@ class RENDER_OT_spritesheet(Operator):
         image_height = sprites_per_column * sprite_height
 
         # Ensure output directory exists
-        if not os.path.exists(output_path):
-            os.makedirs(output_path)
+        if not os.path.exists(dir_path):
+            os.makedirs(os.path.dirname(dir_path))
 
         # Create a new image for the spritesheet
         spritesheet_name = "spritesheet_image"
@@ -108,7 +113,7 @@ class RENDER_OT_spritesheet(Operator):
 
         block_array = []
         for i in range(total_frames):
-            print(f"Frame {i}\n")
+            print(f"Frame {i}")
             row = math.floor(i / sprites_per_row)
             column = i % sprites_per_column
             
@@ -121,39 +126,29 @@ class RENDER_OT_spritesheet(Operator):
             # Update the scene
             context.view_layer.update()
 
-            # Render to a temporary image
-            temp_image_name = f"sprite_{i:03d}"
+            # Render
             scene.render.image_settings.file_format = 'OPEN_EXR'
             scene.render.image_settings.color_mode = 'RGBA'
             scene.render.image_settings.color_depth = '16'
-            scene.render.filepath = os.path.join(output_path, temp_image_name)
-            bpy.ops.render.render(write_still=True)
+            bpy.ops.render.render(write_still=False)
 
-            # Load the rendered image
-            temp_image_path = scene.render.filepath + ".exr"
-            temp_image = bpy.data.images.load(temp_image_path)
+            render_result = bpy.data.images['Viewer Node']
             
-            img = np.array(temp_image.pixels[:])
+            img = np.array(render_result.pixels[:])
             img = np.reshape(img, (sprite_height, sprite_width, 4))
             
-            # block concatenates from last dimension backwards, so we need to put rgb array in first dimension
-            #img = img.transpose(2, 0, 1)
             block_row.append(img)
-            print(f"Temp image dimensions: {img.shape}")
-
-            # Remove temp image and file
-            bpy.data.images.remove(temp_image)
-            os.remove(temp_image_path)
+            # print(f"Temp image dimensions: {img.shape}")
             
         while len(block_array[-1]) < sprites_per_row:
             block_array[-1].append(np.zeros((sprite_height, sprite_width, 4)))
             
-        print(f"First: {len(block_array[0])} - Last: {len(block_array[-1])}")
+        # print(f"First: {len(block_array[0])} - Last: {len(block_array[-1])}")
             
         # Restore original frame and rotation
         scene.frame_set(original_frame)
         
-        print(f"Block array: {block_array}")
+        # print(f"Block array: {block_array}")
         
         images_2d = [[np.asarray(img) for img in row] for row in block_array]
         
@@ -170,8 +165,9 @@ class RENDER_OT_spritesheet(Operator):
         spritesheet.pixels = grid.reshape(-1).tolist()  # flatten in 1 dimension, whatever size necessary
 
         # Save the spritesheet
-        spritesheet.filepath_raw = os.path.join(output_path, "spritesheet.png")
+        spritesheet.filepath_raw = output_path
         spritesheet.file_format = 'PNG'
+        print(f"Saving final spritesheet...")
         spritesheet.save()
 
         # Report before removing the spritesheet
