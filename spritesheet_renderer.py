@@ -23,6 +23,12 @@ from bpy.props import (
 from bpy.types import Panel, Operator, PropertyGroup
 import numpy as np
 
+IMAGE_TYPE_ENUM = [
+    ("PNG", "PNG", "PNG"),
+    ("OPEN_EXR", "OpenEXR", "OpenEXR"),
+    ("JPEG", "JPEG", "JPEG"),
+]
+
 class SpritesheetProperties(PropertyGroup):
     output_path: StringProperty(
         name="Output Path",
@@ -54,6 +60,11 @@ class SpritesheetProperties(PropertyGroup):
         default=8,
         min=1,
     )
+    image_format: EnumProperty(
+        name = "Image Format",
+        description = "Image format of final output spritesheet (Fire/smoke requires OpenEXR)",
+        items = IMAGE_TYPE_ENUM
+    )
 
 class RENDER_OT_spritesheet(Operator):
     bl_idname = "render.spritesheet"
@@ -64,6 +75,9 @@ class RENDER_OT_spritesheet(Operator):
         props = context.scene.spritesheet_props
 
         scene = context.scene
+        if not scene.use_nodes:
+            scene.use_nodes = True # required for Viewer Node image
+
         output_path = bpy.path.abspath(props.output_path)
         dir_path = os.path.dirname(output_path)
         
@@ -121,7 +135,7 @@ class RENDER_OT_spritesheet(Operator):
                 block_array.append([])
             block_row = block_array[row]
             
-            scene.frame_set(i)
+            scene.frame_set(i + start_frame)
 
             # Update the scene
             context.view_layer.update()
@@ -136,6 +150,7 @@ class RENDER_OT_spritesheet(Operator):
             
             img = np.array(render_result.pixels[:])
             img = np.reshape(img, (sprite_height, sprite_width, 4))
+            img = np.flipud(img)
             
             block_row.append(img)
             # print(f"Temp image dimensions: {img.shape}")
@@ -166,7 +181,7 @@ class RENDER_OT_spritesheet(Operator):
 
         # Save the spritesheet
         spritesheet.filepath_raw = output_path
-        spritesheet.file_format = 'PNG'
+        spritesheet.file_format = props.image_format
         print(f"Saving final spritesheet...")
         spritesheet.save()
 
@@ -195,6 +210,7 @@ class VIEW3D_PT_spritesheet_renderer(Panel):
 
         layout.prop(props, "start_frame")
         layout.prop(props, "end_frame")
+        layout.prop(props, "image_format")
         layout.operator("render.spritesheet", text="Render Spritesheet", icon='RENDER_STILL')
 
 classes = (
