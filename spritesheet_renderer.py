@@ -40,13 +40,13 @@ class SpritesheetProperties(PropertyGroup):
         name="Start Frame",
         description="Start frame of the animation",
         default=1,
-        min=1,
+        min=0,
     )
     end_frame: IntProperty(
         name="End Frame",
         description="End frame of the animation",
         default=64,
-        min=1,
+        min=0,
     )
     sprites_per_row: IntProperty(
         name="Sprites Per Row",
